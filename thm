@@ -1,0 +1,205 @@
+#!/bin/bash
+
+# thmsetup Tool v2.0
+# Created by: Mustafa
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+BOLD='\033[1m'
+
+TARGET=""
+MODE="all"
+OUTPUT_DIR="./results_$(date +%Y%m%d_%H%M%S)"
+
+SECLISTS_COMMON="/usr/share/wordlists/dirb/common.txt"
+ROCKYOU_PATH="/usr/share/wordlists/dirb/rockyou.txt"
+SUBDOMAINS_LIST="/home/kali/Downloads/subdomains-top1million-110000.txt"
+
+show_help() {
+    echo -e "${BLUE}thmsetup Tool${NC}"
+    echo -e "${CYAN}Usage:${NC} thmsetup -t <target> [-s <mode>] [-o <output_dir>]"
+    echo ""
+    echo -e "${CYAN}Options:${NC}"
+    echo " -t, --target <target> Target IP or Domain (Required)"
+    echo " -s, --scan <mode> Scan mode: all, web, smb, pass (Default: all)"
+    echo " -o, --output <dir> Output directory (Default: auto-generated)"
+    echo " -h, --help Show this help message"
+    echo ""
+    echo -e "${CYAN}Examples:${NC}"
+    echo " thmsetup -t 192.168.1.100"
+    echo " thmsetup -t example.com -s web"
+}
+
+show_banner() {
+    clear
+    echo -e "${CYAN}${BOLD}"
+    cat << 'EOF'
+_______ _ _ __ __ _____ ______ _______ _ _ _____
+|__ __| | | | \/ |/ ____| ____|__ __| | | | __ \
+| | | |__| | \ / | (___ | |__ | | | | | | |__) |
+| | | __ | |\/| |\___ \| __| | | | | | | ___/
+| | | | | | | | |____) | |____ | | | |__| | |
+|_| |_| |_|_| |_|_____/|______| |_| \____/|_|
+EOF
+    echo -e "${NC}"
+    echo -e "${BLUE}============================================================${NC}"
+    echo -e " ${YELLOW}${BOLD}Created by:${NC} Mustafa | ${GREEN}${BOLD}GitHub:${NC} https://github.com/mustafamix"
+    echo -e " ${CYAN}${BOLD}Version:${NC} v4.0"
+    echo -e "${BLUE}============================================================${NC}"
+    echo ""
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -t|--target)
+            TARGET="$2"
+            shift 2
+            ;;
+        -s|--scan)
+            MODE="$2"
+            shift 2
+            ;;
+        -o|--output)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$TARGET" ]; then
+    echo -e "${RED}Error: Target is required! Use -t <target>${NC}"
+    show_help
+    exit 1
+fi
+
+mkdir -p "$OUTPUT_DIR"
+
+log() {
+    echo -e "${GREEN}[$(date '+%H:%M:%S')]${NC} $1" | tee -a "$OUTPUT_DIR/log.txt"
+}
+
+check_tools() {
+    local tools=("nmap" "feroxbuster" "whatweb" "nikto" "enum4linux" "smbclient" "hydra" "ffuf")
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            log -e "${YELLOW}Warning: $tool not found. Trying to install...${NC}"
+            sudo apt-get install -y "$tool" > /dev/null 2>&1
+            if ! command -v "$tool" &> /dev/null; then
+                log -e "${RED}Failed to install $tool. Skipping related scans.${NC}"
+            fi
+        fi
+    done
+}
+
+run_nmap() {
+    log -e "${BLUE}🔍 Starting Nmap Scan...${NC}"
+    nmap -sC -sV -O -oA "$OUTPUT_DIR/nmap" "$TARGET" 2>&1 | tee "$OUTPUT_DIR/nmap_full.txt"
+    grep "open" "$OUTPUT_DIR/nmap_full.txt" | awk '{print $1}' | cut -d'/' -f1 | sort -u > "$OUTPUT_DIR/open_ports.txt"
+    echo -e "\n${CYAN}${BOLD}=== NMAP SCAN RESULTS ===${NC}"
+    echo -e "${GREEN}Open Ports:${NC}"
+    cat "$OUTPUT_DIR/open_ports.txt"
+    echo -e "${CYAN}${BOLD}========================${NC}\n"
+}
+
+run_web_scan() {
+    log -e "${BLUE}🌐 Starting Web Scans...${NC}"
+    if command -v feroxbuster &> /dev/null; then
+        log -e "${CYAN}Running Feroxbuster with common wordlist...${NC}"
+        feroxbuster -u "$TARGET" -w "$SECLISTS_COMMON" -t 50 -o "$OUTPUT_DIR/ferox.txt" 2>&1 | tee -a "$OUTPUT_DIR/log.txt"
+        echo -e "\n${CYAN}${BOLD}=== FEROSBUSTER RESULTS ===${NC}"
+        echo -e "${GREEN}Found Paths (Status 200):${NC}"
+        grep "200" "$OUTPUT_DIR/ferox.txt" | head -20
+        echo -e "${CYAN}${BOLD}==========================${NC}\n"
+    else
+        log -e "${RED}Feroxbuster not installed. Skipping.${NC}"
+    fi
+    if command -v whatweb &> /dev/null; then
+        log -e "${CYAN}Running WhatWeb...${NC}"
+        whatweb "$TARGET" -o "$OUTPUT_DIR/whatweb.txt" 2>&1 | tee -a "$OUTPUT_DIR/log.txt"
+        echo -e "\n${CYAN}${BOLD}=== WHATWEB RESULTS ===${NC}"
+        cat "$OUTPUT_DIR/whatweb.txt"
+        echo -e "${CYAN}${BOLD}========================${NC}\n"
+    else
+        log -e "${RED}WhatWeb not installed. Skipping.${NC}"
+    fi
+    if command -v nikto &> /dev/null; then
+        log -e "${CYAN}Running Nikto...${NC}"
+        nikto -h "$TARGET" -o "$OUTPUT_DIR/nikto.txt" 2>&1 | tee -a "$OUTPUT_DIR/log.txt"
+        echo -e "\n${CYAN}${BOLD}=== NIKTO RESULTS ===${NC}"
+        cat "$OUTPUT_DIR/nikto.txt"
+        echo -e "${CYAN}${BOLD}========================${NC}\n"
+    else
+        log -e "${RED}Nikto not installed. Skipping.${NC}"
+    fi
+}
+
+run_smb_scan() {
+    log -e "${BLUE}🖥️ Starting SMB Scan...${NC}"
+    if command -v enum4linux &> /dev/null; then
+        log -e "${CYAN}Running Enum4Linux...${NC}"
+        enum4linux -a "$TARGET" -o "$OUTPUT_DIR/enum4linux.txt" 2>&1 | tee -a "$OUTPUT_DIR/log.txt"
+    else
+        log -e "${RED}Enum4Linux not installed. Skipping.${NC}"
+    fi
+    if command -v smbclient &> /dev/null; then
+        log -e "${CYAN}Checking SMB Shares...${NC}"
+        smbclient -L "$TARGET" -N 2>&1 | tee -a "$OUTPUT_DIR/smb_shares.txt"
+    else
+        log -e "${RED}SMBClient not installed. Skipping.${NC}"
+    fi
+}
+
+run_pass_scan() {
+    log -e "${BLUE}🔑 Starting Password Cracking Scan...${NC}"
+    if command -v hydra &> /dev/null; then
+        log -e "${CYAN}Running Hydra on SSH...${NC}"
+        hydra -l admin -P "$ROCKYOU_PATH" "$TARGET" ssh 2>&1 | tee -a "$OUTPUT_DIR/hydra_ssh.txt"
+    else
+        log -e "${RED}Hydra not installed. Skipping.${NC}"
+    fi
+}
+
+show_banner
+check_tools
+
+case $MODE in
+    all)
+        run_nmap
+        run_web_scan
+        run_smb_scan
+        run_pass_scan
+        ;;
+    web)
+        run_nmap
+        run_web_scan
+        ;;
+    smb)
+        run_nmap
+        run_smb_scan
+        ;;
+    pass)
+        run_nmap
+        run_pass_scan
+        ;;
+    *)
+        log -e "${RED}Invalid mode: $MODE${NC}"
+        show_help
+        exit 1
+        ;;
+esac
+
+log -e "${GREEN}Scan completed. Results saved in: $OUTPUT_DIR${NC}"
+exit 0
